@@ -9,6 +9,37 @@ const parseUri = TmpSrf.parseUri
 const users = new Map()
 let mediaserver: any
 
+function createCallee(contact: string, req: any): Promise<{endpoint: any, dialog: Srf.Dialog}> {
+  return new Promise(async (resolve, reject) => {
+    const ep = await mediaserver.createEndpoint()
+    srf.createUAC(
+      contact,
+      {
+        localSdp: ep.local.sdp,
+      },
+      {
+        cbRequest: ((err: any, uacReq: any) => {
+          ;(req as any).on('cancel', () => {
+            uacReq.cancel((() => {}) as any)
+          })
+        }) as any,
+        cbProvisional: (uacRes) => {
+          console.log(`got provisional response: ${uacRes.status}`)
+        },
+      },
+      (err, dialog) => {
+        if(err) {
+          return reject(err)
+        }
+        resolve({
+          endpoint: ep,
+          dialog
+        })
+      }
+    )
+  })
+}
+
 const srf = new Srf.default()
 srf.connect(DRACHTIO_CONFIG)
 
@@ -39,7 +70,7 @@ mrf
   } else {
     const contact = req.registration.contact[0].uri
     users.set(uri.user, contact)
-    console.log(`registering ${uri.user}`)
+    console.log(`registering ${uri.user}`, contact)
     headers['Contact'] =
       `${req.get('Contact')};expires=${req.registration.expires || 300}`
   }
@@ -48,6 +79,7 @@ mrf
     headers,
   })
 })
+
 
 srf.invite(async (req, res) => {
   const uri = parseUri(req.uri)
@@ -64,24 +96,11 @@ srf.invite(async (req, res) => {
     let uacDialog: Srf.Dialog | undefined = undefined
     //try to connect to callee
     console.log('create callee endpoint')
-    const calleeEp = await mediaserver.createEndpoint()
+    const calleeRes = await createCallee(dest, req)
+
+    const calleeEp = calleeRes.endpoint
     console.log('create uac')
-    uacDialog = await srf.createUAC(
-      dest,
-      {
-        localSdp: calleeEp.local.sdp,
-      },
-      {
-        cbRequest: (uacReq) => {
-          ;(req as any).on('cancel', () => {
-            uacReq.cancel((() => {}) as any)
-          })
-        },
-        cbProvisional: (uacRes) => {
-          console.log(`got provisional response: ${uacRes.status}`)
-        },
-      },
-    )
+    uacDialog = calleeRes.dialog
     console.log('modify sdp for uac')
     await calleeEp.modify(uacDialog.remote.sdp)
 
@@ -99,9 +118,9 @@ srf.invite(async (req, res) => {
     uasDialog = await srf.createUAS(req, res, {
       localSdp: callerEp.local.sdp,
     })
-    uacDialog.on('destroy', () => {
+    uasDialog.on('destroy', () => {
       callerEp.destroy()
-      if (uasDialog) uasDialog.destroy()
+      if (uacDialog) uacDialog.destroy()
     })
     console.log('caller ====> callee')
     await callerEp.bridge(calleeEp)
