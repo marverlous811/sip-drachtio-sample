@@ -22,6 +22,6 @@ export const MRF_CONFIG = {
 }
 
 export const RTP_ENGINE_CONFIG = {
-  host: process.env.RTP_ENGINE_HOST || '14.225.211.34',
+  host: process.env.RTP_ENGINE_HOST || '127.0.0.1',
   port: parseInt(process.env.RTP_ENGINE_PORT || '22222'),
 }
