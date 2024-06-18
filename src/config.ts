@@ -20,3 +20,8 @@ export const MRF_CONFIG = {
   port: parseInt(process.env.MRF_PORT || '8021'),
   secret: process.env.MRF_SECRET || '',
 }
+
+export const RTP_ENGINE_CONFIG = {
+  host: process.env.RTP_ENGINE_HOST || '14.225.211.34',
+  port: parseInt(process.env.RTP_ENGINE_PORT || '22222'),
+}
