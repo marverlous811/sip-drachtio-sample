@@ -43,7 +43,7 @@ export function initWithRtpEngine() {
   start(srf, rtpEngineCli, registrar)
 }
 
-function start(srf: any, rtpEngine: any, registrar: any) {
+function start(srf: any, rtpEngine: any, registrar: Registrar) {
   const offer = rtpEngine.offer.bind(rtpEngine, RTP_ENGINE_CONFIG)
   const answer = rtpEngine.answer.bind(rtpEngine, RTP_ENGINE_CONFIG)
   const del = rtpEngine.delete.bind(rtpEngine, RTP_ENGINE_CONFIG)
@@ -197,6 +197,74 @@ function start(srf: any, rtpEngine: any, registrar: any) {
         console.log(`Error connecting call: ${err}`)
       }
     }
+  })
+
+  srf.subscribe((req: any, res: any) => {
+    console.log(
+      `UAC subscribing: ${req.protocol}/${req.source_address}:${req.source_port}`,
+    )
+
+    const from = req.getParsedHeader('from')
+    const fromUser = parseUri(from.uri).user
+    const callid = req.get('Call-Id')
+
+    if (!users.has(fromUser)) {
+      console.log(`invalid/unknown user ${fromUser} attempting to subscribe`)
+      return res.send(503)
+    }
+
+    const headers = {}
+    const obj = registrar.getNextCallIdAndCSeq(callid)
+    if (obj) {
+      Object.assign(headers, obj)
+      registrar.removeTransaction(callid)
+    } else {
+      Object.assign(headers, { CSeq: '1 INVITE' })
+    }
+
+    let subscribeSent: any
+    return srf
+      .createB2BUA(
+        req,
+        res,
+        req.uri,
+        {
+          method: 'SUBSCRIBE',
+          headers: headers,
+          proxyRequestHeaders: [
+            'event',
+            'expires',
+            'allow',
+            'authorization',
+            'accept',
+          ],
+          proxyResponseHeaders: [
+            'subscription-state',
+            'expires',
+            'allow-events',
+            'www-authenticate',
+          ],
+        },
+        {
+          cbRequest: (err: any, req: any) => (subscribeSent = req),
+        },
+      )
+      .catch((err: any) => {
+        if (err instanceof SipError && [401, 407].includes(err.status)) {
+          if (subscribeSent) {
+            registrar.addTransaction({
+              aCallId: callid,
+              bCallId: subscribeSent.get('Call-Id'),
+              bCseq: subscribeSent.get('CSeq'),
+            })
+          }
+        } else {
+          console.log(
+            'Error establishing subscribe dialog: ',
+            err.status || err,
+          )
+        }
+      })
   })
 }
 
