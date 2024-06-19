@@ -171,8 +171,8 @@ function start(srf: any, rtpEngine: any, registrar: any) {
       // uas.on('refer', this._handleRefer.bind(this, uas, uac))
       // uac.on('refer', this._handleRefer.bind(this, uac, uas))
 
-      // uas.on('info', this._handleInfo.bind(this, uas, uac))
-      // uac.on('info', this._handleInfo.bind(this, uac, uas))
+      uas.on('info', _handleInfo.bind(null, uas, uac))
+      uac.on('info', _handleInfo.bind(null, uac, uas))
 
       uas.on(
         'modify',
@@ -297,23 +297,117 @@ async function _handleReinvite(
     }
     res.send(200, { body: response.sdp })
 
-    // if (!req.body && !dlg.hasAckListener) {
-    //   // set listener for ACK, so that we can use that SDP to create the ACK for the other leg.
-    //   dlg.once(
-    //     'ack',
-    //     _handleAck.bind(
-    //       null,
-    //       dlg,
-    //       answer,
-    //       offer,
-    //       ackFunc,
-    //       optsSdp,
-    //       rtpEngineOpts,
-    //     ),
-    //   )
-    // }
+    if (!req.body && !dlg.hasAckListener) {
+      // set listener for ACK, so that we can use that SDP to create the ACK for the other leg.
+      dlg.once(
+        'ack',
+        _handleAck.bind(
+          null,
+          dlg,
+          answer,
+          offer,
+          ackFunc,
+          optsSdp,
+          rtpEngineOpts,
+        ),
+      )
+    }
   } catch (err) {
     console.log('Error handling reinvite', err)
+  }
+}
+
+function _handleInfo(dlg: any, dlgOther: any, req: any, res: any) {
+  console.log(`received info with content-type: ${req.get('Content-Type')}`)
+  res.send(200)
+
+  if (req.get('Content-Type') === 'application/media_control+xml') {
+    dlgOther.request({
+      method: 'INFO',
+      headers: {
+        'Content-Type': req.get('Content-Type'),
+      },
+      body: req.body,
+    })
+  }
+}
+
+async function _handleAck(
+  dlg: any,
+  answer: any,
+  offer: any,
+  ack: any,
+  offerSdp: any,
+  rtpEngineOpts: any,
+  req: any,
+) {
+  console.log('Received ACK with late offer: ', req.body)
+
+  try {
+    let fromTag = dlg.other.sip.remoteTag
+    let toTag = dlg.other.sip.localTag
+    if (dlg.type === 'uac') {
+      fromTag = dlg.sip.localTag
+      toTag = dlg.sip.remoteTag
+    }
+    const offerMedia =
+      dlg.type === 'uas'
+        ? rtpEngineOpts.uas.mediaOpts
+        : rtpEngineOpts.uac.mediaOpts
+    let answerMedia =
+      dlg.type === 'uas'
+        ? rtpEngineOpts.uac.mediaOpts
+        : rtpEngineOpts.uas.mediaOpts
+    //if uas is webrtc facing, we need to keep that side as the active ssl role, so use passive in the ACK sdp
+    if (dlg.type === 'uas' && JSON.stringify(answerMedia).includes('SAVPF')) {
+      let mediaStringified = JSON.stringify(answerMedia)
+      mediaStringified = mediaStringified.replace(
+        'SAVPF"',
+        'SAVPF","DTLS":"passive"',
+      )
+      answerMedia = JSON.parse(mediaStringified)
+    }
+
+    const optsOffer = {
+      ...rtpEngineOpts.common,
+      ...offerMedia,
+      'from-tag': fromTag,
+      'to-tag': toTag,
+      sdp: offerSdp,
+    }
+    //send an offer first so that rtpEngine knows that DTLS fingerprint needs to be in the answer sdp.
+    const response = await offer(optsOffer)
+    if ('ok' !== response.result) {
+      throw new Error(
+        `_handleAck: rtpengine failed: offer: ${JSON.stringify(response)}`,
+      )
+    }
+    console.log('sent offer to use for ACK to rtpengine', {
+      optsOffer,
+      response,
+    })
+
+    const optsAnswer = {
+      ...rtpEngineOpts.common,
+      ...answerMedia,
+      'from-tag': fromTag,
+      'to-tag': toTag,
+      sdp: req.body,
+    }
+    const ackResponse = await answer(optsAnswer)
+    if ('ok' !== ackResponse.result) {
+      throw new Error(
+        `_handleAck: rtpengine failed: answer: ${JSON.stringify(ackResponse)}`,
+      )
+    }
+    console.log('sent answer to rtpEngine', { optsAnswer, ackResponse })
+    if (JSON.stringify(answerMedia).includes('ICE":"remove')) {
+      ackResponse.sdp = removeWebrtcAttributes(ackResponse.sdp)
+    }
+    //send the ACK with sdp
+    ack(ackResponse.sdp)
+  } catch (err) {
+    console.log('Error handling ACK', err)
   }
 }
 
